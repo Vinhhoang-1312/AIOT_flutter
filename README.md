@@ -1,21 +1,38 @@
-# aiot_flutter
+# 🌿 Smart Farm AIoT - Group 4
 
-A new AIOT Flutter project.
+Dự án nông nghiệp thông minh tích hợp AI để tối ưu hóa việc tưới tiêu, giải quyết bài toán lãng phí 70% nước ngọt toàn cầu.
 
-![alt text](image.png)
-![alt text](image-1.png)
-![alt text](image-2.png)
-![alt text](image-3.png)
+## 🏗 Kiến trúc hệ thống
 
-## Getting Started
+<p align="center">
+  <img src="image_e306e5.png" width="600" alt="System Architecture" />
+  <br>
+  <em>Sơ đồ luồng dữ liệu: ESP32 -> MQTT Broker -> Backend (MongoDB/AI) -> Flutter App.</em>
+</p>
 
-This project is a starting point for a Flutter application.
+## 👥 Đội ngũ và Vai trò (Roles)
 
-A few resources to get you started if this is your first Flutter project:
+<p align="center">
+  <img src="image_e306c6.png" width="500" alt="Roles Table" />
+</p>
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+**Chi tiết phân công:**
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- **Hoàng, Kỳ**: Phụ trách **ESP32 / Hardware** & **Flutter Mobile App**.
+- **Tín, San**: Phụ trách **Backend / Server** & **AI / Data Modeling**.
+
+## 🛠 Công nghệ cốt lõi
+
+- **Frontend**: Flutter (Giao diện Glassmorphism hiện đại 2026).
+- **Hardware**: ESP32, LoRa (Truyền tin tầm xa, tiêu thụ điện thấp).
+- **Communication**: MQTT Protocol (Lightweight & Scalable).
+- **AI Model**: LSTM/ARIMA dự báo độ ẩm đất dựa trên dữ liệu chuỗi thời gian.
+
+## 📱 Giao diện ứng dụng (Mobile App UI)
+
+<p align="center">
+  <img src="image.png" width="200" style="margin: 10px" />
+  <img src="image-1.png" width="200" style="margin: 10px" />
+  <img src="image-2.png" width="200" style="margin: 10px" />
+  <img src="image-3.png" width="200" style="margin: 10px" />
+</p>

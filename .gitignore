@@ -17,4 +17,4 @@ build/
 pubspec.lock
 .idea/
 .vscode/
-*.iml
+*.imlgit rm -r --cached .
