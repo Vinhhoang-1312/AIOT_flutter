@@ -2,20 +2,6 @@
 
 Dự án nông nghiệp thông minh tích hợp AI để tối ưu hóa việc tưới tiêu, giải quyết bài toán lãng phí 70% nước ngọt toàn cầu.
 
-## 🏗 Kiến trúc hệ thống
-
-<p align="center">
-  <img src="image_e306e5.png" width="600" alt="System Architecture" />
-  <br>
-  <em>Sơ đồ luồng dữ liệu: ESP32 -> MQTT Broker -> Backend (MongoDB/AI) -> Flutter App.</em>
-</p>
-
-## 👥 Đội ngũ và Vai trò (Roles)
-
-<p align="center">
-  <img src="image_e306c6.png" width="500" alt="Roles Table" />
-</p>
-
 **Chi tiết phân công:**
 
 - **Hoàng, Kỳ**: Phụ trách **ESP32 / Hardware** & **Flutter Mobile App**.
@@ -24,7 +10,7 @@ Dự án nông nghiệp thông minh tích hợp AI để tối ưu hóa việc t
 ## 🛠 Công nghệ cốt lõi
 
 - **Frontend**: Flutter (Giao diện Glassmorphism hiện đại 2026).
-- **Hardware**: ESP32, LoRa (Truyền tin tầm xa, tiêu thụ điện thấp).
+- **Hardware**: ESP32,ESP32 CAM, LoRa(optional) (Truyền tin tầm xa, tiêu thụ điện thấp).
 - **Communication**: MQTT Protocol (Lightweight & Scalable).
 - **AI Model**: LSTM/ARIMA dự báo độ ẩm đất dựa trên dữ liệu chuỗi thời gian.
 
