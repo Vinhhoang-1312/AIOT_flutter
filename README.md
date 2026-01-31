@@ -16,9 +16,15 @@ Dự án nông nghiệp thông minh tích hợp AI để tối ưu hóa việc t
 
 ## 📱 Giao diện ứng dụng (Mobile App UI)
 
-<p align="center">
-  <img src="image.png" width="200" style="margin: 10px" />
-  <img src="image-1.png" width="200" style="margin: 10px" />
-  <img src="image-2.png" width="200" style="margin: 10px" />
-  <img src="image-3.png" width="200" style="margin: 10px" />
-</p>
+<div align="center">
+
+|                                      |                                      |                                      |
+| :----------------------------------: | :----------------------------------: | :----------------------------------: |
+| <img src="image1.jpg" width="220" /> | <img src="image2.jpg" width="220" /> | <img src="image3.jpg" width="220" /> |
+|        _Dashboard Tổng quan_         |             _Camera AI_              |           _Điều khiển Bơm_           |
+| <img src="image4.jpg" width="220" /> | <img src="image5.jpg" width="220" /> | <img src="image6.jpg" width="220" /> |
+|          _Thanh điều hướng_          |          _Nhật ký hệ thống_          |          _Thông tin dự án_           |
+
+</div>
+
+---

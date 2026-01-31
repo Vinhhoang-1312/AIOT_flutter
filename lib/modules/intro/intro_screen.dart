@@ -19,14 +19,14 @@ class _IntroScreenState extends State<IntroScreen> {
           "https://images.unsplash.com/photo-1625246333195-78d9c38ad449?q=80&w=1000",
     },
     {
-      "t": "Dự Báo AI",
-      "d": "Mô hình LSTM dự đoán chính xác nhu cầu tưới tiêu của cây trồng.",
+      "t": "Tiết Kiệm Nước",
+      "d": "Giảm thiểu lãng phí và tăng năng suất thông qua dữ liệu thực.",
       "img":
           "https://images.unsplash.com/photo-1560493676-04071c5f467b?q=80&w=1000",
     },
     {
-      "t": "Tiết Kiệm Nước",
-      "d": "Giảm thiểu lãng phí và tăng năng suất thông qua dữ liệu thực.",
+      "t": "Dự Báo AI",
+      "d": "Mô hình LSTM dự đoán chính xác nhu cầu tưới tiêu của cây trồng.",
       "img":
           "https://images.unsplash.com/photo-1581092580497-e0d23cbdf1dc?q=80&w=1000",
     },

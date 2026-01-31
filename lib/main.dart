@@ -13,7 +13,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Smart Farm AIoT',
+      title: 'Smart Farm AIOT',
       theme: AppTheme.lightTheme,
       home: const IntroScreen(),
     );
