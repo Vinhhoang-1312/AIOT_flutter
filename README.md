@@ -22,7 +22,7 @@ Dự án nông nghiệp thông minh tích hợp AI để tối ưu hóa việc t
 | :----------------------------------: | :----------------------------------: | :----------------------------------: |
 | <img src="image1.jpg" width="220" /> | <img src="image2.jpg" width="220" /> | <img src="image3.jpg" width="220" /> |
 |        _Dashboard Tổng quan_         |             _Camera AI_              |           _Điều khiển Bơm_           |
-| <img src="image4.jpg" width="220" /> | <img src="image5.jpg" width="220" /> | <img src="image6.jpg" width="220" /> |
+| <img src="image4.jpg" width="220" /> | <img src="image5.jpg" width="220" /> | <img src="image6.png" width="220" /> |
 |          _Thanh điều hướng_          |          _Nhật ký hệ thống_          |          _Thông tin dự án_           |
 
 </div>
