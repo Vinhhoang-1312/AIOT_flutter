@@ -2,7 +2,10 @@ import 'dart:math';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../../data/models/farm_event_model.dart';
+import '../../core/constants/ai_constants.dart';
 
 class SensorDashboardScreen extends StatefulWidget {
   final List<FarmEvent> historyData;
@@ -14,50 +17,126 @@ class SensorDashboardScreen extends StatefulWidget {
 }
 
 class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
-  String _selectedRange = 'Ngày'; // 'Ngày', 'Tuần', 'Tháng'
-  String _selectedSensor = 'Temp'; // 'Temp', 'Humi', 'Soil'
+  final TextEditingController _plantInfoController = TextEditingController();
+  String _selectedRange = 'Ngày';
+  String _selectedSensor = 'Temp';
 
-  // Mock data riêng cho biểu đồ để hiển thị đẹp khi chưa có data thật nhiều
+  String _aiAnalysis = "Đang kết nối với trí tuệ nhân tạo...";
+  bool _isLoadingAI = false;
+
   List<FlSpot> _realDataPoints = [];
-  List<FlSpot> _aiIdealDataPoints = [];
+  List<FlSpot> _referencePoints = [];
 
   @override
   void initState() {
     super.initState();
     _generateChartData();
+    _fetchAIAnalysis();
   }
 
-  // Hàm tạo dữ liệu giả lập dựa trên lựa chọn (Ngày/Tuần)
+  Future<void> _fetchAIAnalysis() async {
+    if (!mounted) return;
+    setState(() => _isLoadingAI = true);
+
+    try {
+      final apiKey = dotenv.env['GEMINI_API_KEY'];
+      if (apiKey == null || apiKey.isEmpty) throw Exception("Thiếu API Key");
+
+      // 1. Cập nhật model sang 2.5 Flash Lite (hoặc gemini-3-flash)
+      final model = GenerativeModel(
+        model: 'gemini-2.5-flash-lite',
+        apiKey: apiKey,
+      );
+
+      // 2. Lấy thông tin cây từ TextField
+      String plantContext = _plantInfoController.text.isEmpty
+          ? "Cây trồng chưa xác định"
+          : _plantInfoController.text;
+
+      // 3. Chuẩn bị dữ liệu lịch sử (lấy nhiều hơn để AI so sánh)
+      String dataSummary = widget.historyData.isEmpty
+          ? "(Dữ liệu mô phỏng): Nhiệt độ 30°C, Đất 50%"
+          : widget.historyData
+                .take(10)
+                .map(
+                  (e) =>
+                      "Lúc ${DateFormat('HH:mm dd/MM').format(e.timestamp)}: T:${e.temp}°C, Đất:${e.soil}%, Khí:${e.humi}%",
+                )
+                .join("\n");
+
+      // 4. Tạo Prompt kết hợp cả thông tin cây + dữ liệu cảm biến
+      final prompt =
+          """
+        Thông tin về cây: $plantContext.
+        Dữ liệu cảm biến lịch sử và hiện tại:
+        $dataSummary
+        
+        Nhiệm vụ: Dựa vào loại cây này và dữ liệu trên, hãy phân tích tình trạng sức khỏe của cây và đưa ra lời khuyên chăm sóc ngắn gọn.
+      """;
+
+      final content = [Content.text(prompt)];
+      final response = await model.generateContent(content);
+
+      if (mounted) {
+        setState(() {
+          _aiAnalysis = response.text ?? "AI không trả về kết quả.";
+          _isLoadingAI = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _aiAnalysis = "Lỗi kết nối AI: ${e.toString()}";
+          _isLoadingAI = false;
+        });
+      }
+    }
+  }
+
   void _generateChartData() {
     _realDataPoints.clear();
-    _aiIdealDataPoints.clear();
+    _referencePoints.clear();
     final random = Random();
 
+    // Số lượng điểm dữ liệu hiển thị
     int points = _selectedRange == 'Ngày'
-        ? 24
-        : (_selectedRange == 'Tuần' ? 7 : 30);
+        ? 24 // 24 giờ
+        : (_selectedRange == 'Tuần' ? 7 : 30); // 7 ngày hoặc 30 ngày
+
+    // Giá trị tham chiếu (đường nét đứt)
+    double idealVal = _selectedSensor == 'Temp'
+        ? 28.0
+        : (_selectedSensor == 'Humi' ? 75.0 : 60.0);
+
+    // Giá trị nền random (nếu chưa map data thật)
     double baseVal = _selectedSensor == 'Temp'
-        ? 30
-        : (_selectedSensor == 'Humi' ? 70 : 50);
+        ? 27
+        : (_selectedSensor == 'Humi' ? 70 : 55);
+
+    // Logic: Nếu có historyData thì dùng, không thì random
+    if (widget.historyData.isNotEmpty && widget.historyData.length >= points) {
+      // TODO: Logic map dữ liệu thật vào đây sau này
+      // Tạm thời vẫn giữ random để UI đẹp khi test
+    }
 
     for (int i = 0; i < points; i++) {
-      // Dữ liệu thực tế (biến động nhiều)
-      double noise = (random.nextDouble() - 0.5) * 10;
-      _realDataPoints.add(FlSpot(i.toDouble(), baseVal + noise));
-
-      // Dữ liệu AI Lý tưởng (Đường mượt mà hơn, chuẩn healthy)
-      // Ví dụ: AI tính toán cây cần nhiệt độ ổn định hơn
-      double idealNoise = sin(i / 2) * 2;
-      _aiIdealDataPoints.add(FlSpot(i.toDouble(), baseVal + idealNoise));
+      _realDataPoints.add(
+        FlSpot(i.toDouble(), baseVal + random.nextDouble() * 5),
+      );
+      _referencePoints.add(FlSpot(i.toDouble(), idealVal));
     }
     setState(() {});
   }
 
-  void _onFilterChanged(String range) {
-    setState(() {
-      _selectedRange = range;
-      _generateChartData(); // Tạo lại data giả khác để demo hiệu ứng
-    });
+  String _getDateRangeText() {
+    final now = DateTime.now();
+    if (_selectedRange == 'Ngày') {
+      return "Hôm nay, ${DateFormat('dd/MM').format(now)}";
+    } else if (_selectedRange == 'Tuần') {
+      return "7 ngày qua";
+    } else {
+      return "Tháng ${now.month}/${now.year}";
+    }
   }
 
   @override
@@ -65,7 +144,7 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
-        title: const Text("Phân tích AI"),
+        title: const Text("Phân tích hệ thống", style: TextStyle(fontSize: 18)),
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
@@ -76,27 +155,31 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // --- 1. TAB BAR CHỌN THỜI GIAN ---
-              _buildTimeFilter(),
-
-              const SizedBox(height: 20),
-
-              // --- 2. TAB CHỌN LOẠI CẢM BIẾN ---
-              _buildSensorSelector(),
-
-              const SizedBox(height: 30),
-
-              // --- 3. BIỂU ĐỒ ---
-              SizedBox(
-                height: 350, // Tăng chiều cao để không bị chật
-                child: _buildChart(),
+              Text(
+                _getDateRangeText(),
+                style: const TextStyle(
+                  color: Color(0xFF00E676),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
               ),
+              const SizedBox(height: 15),
+              _buildTimeFilter(),
+              const SizedBox(height: 20),
+              _buildSensorSelector(),
+              const SizedBox(height: 30),
+
+              // Chiều cao biểu đồ
+              SizedBox(height: 300, child: _buildChart()),
+
+              const SizedBox(height: 15),
+              _buildLegend(),
+              const SizedBox(height: 30),
+              _buildPlantInput(),
 
               const SizedBox(height: 20),
-              _buildLegend(),
-
-              const SizedBox(height: 30),
               _buildAIAnalysisText(),
+              const SizedBox(height: 20),
             ],
           ),
         ),
@@ -104,9 +187,10 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
     );
   }
 
+  // --- WIDGET UI ---
+
   Widget _buildTimeFilter() {
     return Container(
-      width: double.infinity,
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
         color: const Color(0xFF1E2630),
@@ -116,8 +200,11 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
         children: ['Ngày', 'Tuần', 'Tháng'].map((range) {
           final isSelected = _selectedRange == range;
           return Expanded(
-            child: GestureDetector(
-              onTap: () => _onFilterChanged(range),
+            child: InkWell(
+              onTap: () {
+                setState(() => _selectedRange = range);
+                _generateChartData();
+              },
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 10),
                 decoration: BoxDecoration(
@@ -144,7 +231,7 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
 
   Widget _buildSensorSelector() {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      mainAxisAlignment: MainAxisAlignment.spaceAround,
       children: [
         _sensorBtn('Temp', 'Nhiệt độ', Icons.thermostat),
         _sensorBtn('Humi', 'Độ ẩm KK', Icons.water_drop),
@@ -155,27 +242,24 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
 
   Widget _sensorBtn(String key, String label, IconData icon) {
     final isSelected = _selectedSensor == key;
-    return GestureDetector(
+    return InkWell(
       onTap: () {
-        setState(() {
-          _selectedSensor = key;
-          _generateChartData();
-        });
+        setState(() => _selectedSensor = key);
+        _generateChartData();
       },
       child: Column(
         children: [
-          CircleAvatar(
-            backgroundColor: isSelected
-                ? Colors.blueAccent
-                : const Color(0xFF1E2630),
-            child: Icon(icon, color: Colors.white),
+          Icon(
+            icon,
+            color: isSelected ? Colors.blueAccent : Colors.white24,
+            size: 28,
           ),
-          const SizedBox(height: 5),
+          const SizedBox(height: 4),
           Text(
             label,
             style: TextStyle(
-              color: isSelected ? Colors.blueAccent : Colors.white54,
-              fontSize: 12,
+              color: isSelected ? Colors.blueAccent : Colors.white24,
+              fontSize: 11,
             ),
           ),
         ],
@@ -185,97 +269,120 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
 
   Widget _buildChart() {
     return LineChart(
+      // Tắt hiệu ứng chuyển động để biểu đồ chuyên nghiệp hơn
+      duration: Duration.zero,
       LineChartData(
-        // Cấu hình Grid
-        gridData: FlGridData(
+        lineTouchData: LineTouchData(
+          touchTooltipData: LineTouchTooltipData(
+            tooltipBgColor: Colors.blueGrey.withOpacity(0.9),
+            getTooltipItems: (List<LineBarSpot> touchedBarSpots) {
+              return touchedBarSpots.map((barSpot) {
+                String timeLabel = "";
+                if (_selectedRange == 'Ngày') {
+                  timeLabel = "${barSpot.x.toInt()}h";
+                } else if (_selectedRange == 'Tuần') {
+                  final days = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
+                  timeLabel = days[barSpot.x.toInt() % 7];
+                } else {
+                  timeLabel = "Ngày ${barSpot.x.toInt() + 1}";
+                }
+
+                return LineTooltipItem(
+                  "$timeLabel\n",
+                  const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                  children: [
+                    TextSpan(
+                      text: "${barSpot.y.toStringAsFixed(1)}",
+                      style: const TextStyle(
+                        color: Color(0xFF00E676),
+                        fontSize: 11,
+                        fontWeight: FontWeight.normal,
+                      ),
+                    ),
+                  ],
+                );
+              }).toList();
+            },
+          ),
+        ),
+        gridData: const FlGridData(
           show: true,
           drawVerticalLine: false,
-          getDrawingHorizontalLine: (value) =>
-              FlLine(color: Colors.white10, strokeWidth: 1),
+          horizontalInterval: 10,
         ),
-
-        // Cấu hình trục và tiêu đề
         titlesData: FlTitlesData(
-          show: true,
-          // Ẩn trục phải và trên
           rightTitles: const AxisTitles(
             sideTitles: SideTitles(showTitles: false),
           ),
           topTitles: const AxisTitles(
             sideTitles: SideTitles(showTitles: false),
           ),
-
-          // Trục dưới (Thời gian)
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 40,
+              interval: 10,
+              getTitlesWidget: (value, meta) {
+                return Text(
+                  value.toInt().toString(),
+                  style: const TextStyle(color: Colors.white30, fontSize: 10),
+                );
+              },
+            ),
+          ),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
-              reservedSize: 32, // Tăng khoảng trống để chữ không bị cắt
-              interval: _selectedRange == 'Ngày' ? 4 : 1, // Dãn cách label
-              getTitlesWidget: (value, meta) {
-                String text = '';
-                if (_selectedRange == 'Ngày') {
-                  text = '${value.toInt()}h';
-                } else if (_selectedRange == 'Tuần') {
+              interval: _selectedRange == 'Tháng'
+                  ? 5
+                  : (_selectedRange == 'Ngày' ? 4 : 1),
+              getTitlesWidget: (val, meta) {
+                String text = "";
+                if (_selectedRange == 'Tuần') {
                   const days = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
-                  if (value.toInt() >= 0 && value.toInt() < days.length) {
-                    text = days[value.toInt()];
-                  }
+                  int index = val.toInt();
+                  if (index >= 0 && index < days.length) text = days[index];
+                } else if (_selectedRange == 'Ngày') {
+                  text = "${val.toInt()}h";
                 } else {
-                  if (value.toInt() % 5 == 0) text = '${value.toInt() + 1}';
+                  text = "${val.toInt() + 1}";
                 }
-                return SideTitleWidget(
-                  axisSide: meta.axisSide,
+
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
                   child: Text(
                     text,
-                    style: const TextStyle(color: Colors.white54, fontSize: 10),
+                    style: const TextStyle(color: Colors.white38, fontSize: 10),
                   ),
                 );
               },
             ),
           ),
-
-          // Trục trái (Giá trị)
-          leftTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 40, // Tăng khoảng trống bên trái
-              getTitlesWidget: (value, meta) {
-                return Text(
-                  value.toInt().toString(),
-                  style: const TextStyle(color: Colors.white54, fontSize: 10),
-                );
-              },
-            ),
-          ),
         ),
-
         borderData: FlBorderData(show: false),
-
-        // Cấu hình đường
         lineBarsData: [
-          // 1. Đường dữ liệu Thực tế (Xanh lá / Đậm)
           LineChartBarData(
             spots: _realDataPoints,
             isCurved: true,
             color: const Color(0xFF00E676),
             barWidth: 3,
-            isStrokeCapRound: true,
             dotData: const FlDotData(show: false),
             belowBarData: BarAreaData(
               show: true,
-              color: const Color(0xFF00E676).withOpacity(0.1), // Đổ bóng nhẹ
+              color: const Color(0xFF00E676).withOpacity(0.1),
             ),
           ),
-
-          // 2. Đường AI Lý tưởng / Tiêu chuẩn (Vàng / Nét đứt)
           LineChartBarData(
-            spots: _aiIdealDataPoints,
-            isCurved: true,
-            color: Colors.orangeAccent.withOpacity(0.8),
-            barWidth: 2,
-            isStrokeCapRound: true,
+            spots: _referencePoints,
+            isCurved: false,
+            color: Colors.white24,
+            barWidth: 1,
+            dashArray: [5, 5],
             dotData: const FlDotData(show: false),
-            dashArray: [5, 5], // TẠO NÉT ĐỨT
           ),
         ],
       ),
@@ -286,35 +393,60 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _legendItem("Thực tế", const Color(0xFF00E676), false),
+        _dot(const Color(0xFF00E676)),
+        const SizedBox(width: 5),
+        const Text(
+          "Thực tế",
+          style: TextStyle(color: Colors.white54, fontSize: 12),
+        ),
         const SizedBox(width: 20),
-        _legendItem("AI Tiêu chuẩn", Colors.orangeAccent, true),
+        _dot(Colors.white24),
+        const SizedBox(width: 5),
+        const Text(
+          "Ngưỡng tối ưu",
+          style: TextStyle(color: Colors.white54, fontSize: 12),
+        ),
       ],
     );
   }
 
-  Widget _legendItem(String text, Color color, bool isDashed) {
-    return Row(
+  Widget _dot(Color c) => Container(
+    width: 8,
+    height: 8,
+    decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+  );
+
+  Widget _buildPlantInput() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          width: 16,
-          height: 3,
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(2),
+        const Text(
+          "THÔNG TIN CÂY TRỒNG",
+          style: TextStyle(
+            color: Colors.white54,
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
           ),
-          child: isDashed
-              ? Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Container(width: 6, color: color),
-                    Container(width: 6, color: color),
-                  ],
-                )
-              : null,
         ),
-        const SizedBox(width: 6),
-        Text(text, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _plantInfoController,
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+          decoration: InputDecoration(
+            hintText: "Ví dụ: Cây dưa lưới, cao 1m, đang ra hoa...",
+            hintStyle: const TextStyle(color: Colors.white24, fontSize: 13),
+            filled: true,
+            fillColor: const Color(0xFF1E2630),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 12,
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -323,36 +455,55 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.blueAccent.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
+        color: Colors.blueAccent.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.blueAccent.withOpacity(0.2)),
       ),
-      child: const Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.auto_awesome, color: Colors.blueAccent),
-          SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "Đánh giá AI",
-                  style: TextStyle(
-                    color: Colors.blueAccent,
-                    fontWeight: FontWeight.bold,
-                  ),
+          Row(
+            children: [
+              const Icon(
+                Icons.auto_awesome,
+                color: Colors.blueAccent,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                "GEMINI AI PHÂN TÍCH",
+                style: TextStyle(
+                  color: Colors.blueAccent,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.1,
                 ),
-                SizedBox(height: 6),
-                Text(
-                  "Dữ liệu thực tế đang bám sát tiêu chuẩn healthy. Tuy nhiên, vào lúc 14h nhiệt độ có xu hướng tăng nhẹ so với mức lý tưởng. Cần theo dõi thêm hệ thống tưới.",
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 13,
-                    height: 1.4,
-                  ),
+              ),
+              const Spacer(),
+              if (_isLoadingAI)
+                const SizedBox(
+                  width: 15,
+                  height: 15,
+                  child: CircularProgressIndicator(strokeWidth: 2),
                 ),
-              ],
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _aiAnalysis,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 14,
+              height: 1.5,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: _isLoadingAI ? null : _fetchAIAnalysis,
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text("Cập nhật phân tích"),
             ),
           ),
         ],

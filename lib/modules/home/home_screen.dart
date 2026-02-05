@@ -259,15 +259,7 @@ class DashboardView extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 20),
           children: [
             const SizedBox(height: 30),
-            const Text(
-              "Hệ thống\nĐang hoạt động",
-              style: TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-                height: 1.2,
-              ),
-            ),
+
             const SizedBox(height: 8),
             Row(
               children: [
