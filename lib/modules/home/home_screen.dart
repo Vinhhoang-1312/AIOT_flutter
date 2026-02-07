@@ -30,6 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, dynamic>? _weatherData;
   String _weatherDesc = "--";
   String _lightCondition = "--";
+  String _weatherTemp = "--";
 
   http.Client? _client;
   StreamSubscription? _sseSubscription;
@@ -60,6 +61,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final code = current['weather_code'];
         _weatherDesc = _weatherService.getWeatherDescription(code);
         _lightCondition = _weatherService.getLightCondition(current);
+        _weatherTemp = current['temperature_2m']?.toString() ?? "--";
       });
     }
   }
@@ -172,6 +174,7 @@ class _HomeScreenState extends State<HomeScreen> {
       body: DashboardView(
         latestEvent: _latestEvent,
         weatherDesc: _weatherDesc,
+        weatherTemp: _weatherTemp,
         lightCondition: _lightCondition,
         cityName: _selectedCity.name,
         onWeatherTap: _openCitySelection,
@@ -183,7 +186,7 @@ class _HomeScreenState extends State<HomeScreen> {
               builder: (_) => SensorDashboardScreen(
                 historyData: _eventHistory,
                 cityName: _selectedCity.name,
-                weatherCondition: _weatherDesc,
+                weatherCondition: "$_weatherDesc ($_weatherTemp°C)",
               ),
             ),
           );
@@ -302,6 +305,7 @@ class DashboardView extends StatelessWidget {
   final FarmEvent? latestEvent;
   final VoidCallback onOpenDashboard;
   final String weatherDesc;
+  final String weatherTemp;
   final String lightCondition;
   final String cityName;
   final VoidCallback? onWeatherTap;
@@ -313,6 +317,7 @@ class DashboardView extends StatelessWidget {
     required this.onOpenDashboard,
     required this.onRefresh,
     this.weatherDesc = "--",
+    this.weatherTemp = "--",
     this.lightCondition = "--",
     this.cityName = "Đà Nẵng",
     this.onWeatherTap,
@@ -455,8 +460,8 @@ class DashboardView extends StatelessWidget {
                   ),
                   SensorCard(
                     title: "Thời tiết ($cityName)",
-                    value: weatherDesc,
-                    unit: lightCondition,
+                    value: "$weatherTemp°C",
+                    unit: "$weatherDesc ($lightCondition)",
                     icon: Icons.wb_sunny,
                     iconColor: Colors.yellow,
                     onTap: onWeatherTap,
