@@ -1,5 +1,6 @@
 // lib/modules/controls/pump_control_screen.dart
 import 'package:flutter/material.dart';
+import '../../data/services/api_service.dart';
 
 class PumpControlScreen extends StatefulWidget {
   const PumpControlScreen({super.key});
@@ -11,6 +12,36 @@ class PumpControlScreen extends StatefulWidget {
 class _PumpControlScreenState extends State<PumpControlScreen> {
   bool isAutoMode = true; // Mặc định là tự động
   bool isPumpOn = false; // Trạng thái máy bơm
+  bool isLoading = false; // Trạng thái đang gửi lệnh
+
+  Future<void> _togglePump() async {
+    setState(() {
+      isLoading = true;
+    });
+
+    final action = isPumpOn ? "pump_off" : "pump_on";
+    final success = await ApiService.controlDevice("ESP32_01", action);
+
+    if (mounted) {
+      setState(() {
+        isLoading = false;
+        if (success) {
+          isPumpOn = !isPumpOn;
+        }
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            success
+                ? "Gửi lệnh ${isPumpOn ? 'BẬT' : 'TẮT'} thành công"
+                : "Gửi lệnh thất bại. Kiểm tra backend.",
+          ),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -84,12 +115,14 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
               ),
               value: isAutoMode,
               activeColor: const Color(0xFF00E676),
-              onChanged: (val) {
+              onChanged: (val) async {
                 setState(() {
                   isAutoMode = val;
-                  if (isAutoMode)
-                    isPumpOn = false; // Về auto thì reset trạng thái tay
                 });
+                // Nếu bật auto, gửi lệnh tắt máy bơm để AI quản lý
+                if (isAutoMode && isPumpOn) {
+                  await _togglePump();
+                }
               },
             ),
 
@@ -102,13 +135,9 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     GestureDetector(
-                      onTap: isAutoMode
-                          ? null // Không cho bấm nếu đang Auto
-                          : () {
-                              setState(() {
-                                isPumpOn = !isPumpOn;
-                              });
-                            },
+                      onTap: (isAutoMode || isLoading)
+                          ? null // Không cho bấm nếu đang Auto hoặc đang load
+                          : _togglePump,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 300),
                         width: 180,
@@ -136,11 +165,17 @@ class _PumpControlScreenState extends State<PumpControlScreen> {
                             width: 2,
                           ),
                         ),
-                        child: Icon(
-                          Icons.power_settings_new,
-                          size: 80,
-                          color: isAutoMode ? Colors.grey : Colors.white,
-                        ),
+                        child: isLoading
+                            ? const CircularProgressIndicator(
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
+                              )
+                            : Icon(
+                                Icons.power_settings_new,
+                                size: 80,
+                                color: isAutoMode ? Colors.grey : Colors.white,
+                              ),
                       ),
                     ),
                     const SizedBox(height: 20),

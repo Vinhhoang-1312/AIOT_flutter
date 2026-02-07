@@ -20,21 +20,31 @@ class FarmEvent {
     this.imageBase64,
   });
 
-  // Convert Base64 string sang bytes để hiện ảnh
+  // Chuyển Base64 sang bytes
   Uint8List? get imageBytes =>
       imageBase64 != null ? base64Decode(imageBase64!) : null;
 
   factory FarmEvent.fromJson(Map<String, dynamic> json) {
+    // Trích xuất các object con (Format cũ / Latest SSE)
+    final sensorData = json['sensor_data'] as Map<String, dynamic>?;
+    final inference = json['inference'] as Map<String, dynamic>?;
+
+    // Ưu tiên đọc từ flat (Format History mới) nếu không có nested
+    final tempValue = json['temperature'] ?? sensorData?['temp'] ?? 0;
+    final humiValue = json['humidity'] ?? sensorData?['humi'] ?? 0;
+    final soilValue = json['soil_moisture'] ?? sensorData?['soil'] ?? 0;
+
+    // Timestamp có thể là 'time' hoặc 'timestamp'
+    final timeStr = json['time'] ?? json['timestamp'];
+
     return FarmEvent(
-      timestamp: json['timestamp'] != null
-          ? DateTime.parse(json['timestamp'])
-          : DateTime.now(),
-      soil: (json['sensor_data']['soil'] ?? 0).toDouble(),
-      temp: (json['sensor_data']['temp'] ?? 0).toDouble(),
-      humi: (json['sensor_data']['humi'] ?? 0).toDouble(),
-      anomalyStatus: json['inference']['anomaly']['status'] ?? "Unknown",
-      plantStatus: json['inference']['plant_status']['status'] ?? "Unknown",
-      imageBase64: json['image_base64'], // Chuỗi base64 thô
+      timestamp: timeStr != null ? DateTime.parse(timeStr) : DateTime.now(),
+      soil: (soilValue ?? 0).toDouble(),
+      temp: (tempValue ?? 0).toDouble(),
+      humi: (humiValue ?? 0).toDouble(),
+      anomalyStatus: inference?['anomaly']?['status'] ?? "Unknown",
+      plantStatus: inference?['plant_status']?['status'] ?? "Unknown",
+      imageBase64: json['image_base64'],
     );
   }
 }

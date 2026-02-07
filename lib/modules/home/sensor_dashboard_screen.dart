@@ -1,131 +1,242 @@
-import 'dart:math';
+import 'dart:async';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../../data/models/farm_event_model.dart';
-import '../../core/constants/ai_constants.dart';
+import '../../data/services/api_service.dart';
 
 class SensorDashboardScreen extends StatefulWidget {
   final List<FarmEvent> historyData;
+  final String cityName;
+  final String weatherCondition;
 
-  const SensorDashboardScreen({super.key, required this.historyData});
+  const SensorDashboardScreen({
+    super.key,
+    required this.historyData,
+    required this.cityName,
+    required this.weatherCondition,
+  });
 
   @override
   State<SensorDashboardScreen> createState() => _SensorDashboardScreenState();
 }
 
 class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
-  final TextEditingController _plantInfoController = TextEditingController();
   String _selectedRange = 'Ngày';
   String _selectedSensor = 'Temp';
 
-  String _aiAnalysis = "Đang kết nối với trí tuệ nhân tạo...";
+  String _aiAnalysis = "Nhấn 'Phân tích' để bắt đầu AI tư vấn.";
+  String _currentModelUsed = "";
   bool _isLoadingAI = false;
+  final TextEditingController _plantController = TextEditingController();
 
   List<FlSpot> _realDataPoints = [];
   List<FlSpot> _referencePoints = [];
+  List<FarmEvent> _currentHistory = [];
 
   @override
   void initState() {
     super.initState();
-    _generateChartData();
-    _fetchAIAnalysis();
+    _currentHistory = widget.historyData;
+    _loadData();
+  }
+
+  @override
+  void dispose() {
+    _plantController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadData() async {
+    await _fetchHistory();
+  }
+
+  Future<void> _fetchHistory() async {
+    final now = DateTime.now();
+    DateTime startTime;
+    String interval = '1h';
+
+    if (_selectedRange == 'Ngày') {
+      startTime = now.subtract(const Duration(hours: 24));
+      interval = '1h'; // 24 điểm
+    } else if (_selectedRange == 'Tuần') {
+      startTime = now.subtract(const Duration(days: 7));
+      interval = '6h'; // 28 điểm
+    } else {
+      startTime = now.subtract(const Duration(days: 30));
+      interval = '1d'; // 30 điểm
+    }
+
+    final history = await ApiService.getEnvironmentHistory(
+      startTime: startTime.toIso8601String(),
+      endTime: now.toIso8601String(),
+      interval: interval,
+    );
+
+    if (mounted) {
+      setState(() {
+        _currentHistory = history;
+        _updateChartFromHistory();
+      });
+    }
   }
 
   Future<void> _fetchAIAnalysis() async {
     if (!mounted) return;
-    setState(() => _isLoadingAI = true);
+    setState(() {
+      _isLoadingAI = true;
+      _aiAnalysis = "Đang tải phân tích...";
+      _currentModelUsed = "";
+    });
+
+    final List<String?> keysToTry = [
+      dotenv.env['GEMINI_API_KEY'],
+      dotenv.env['GEMINI_BACKUP_KEY'],
+    ];
+
+    final List<String> modelsToTry = [
+      'gemini-2.5-flash-lite',
+      'gemini-2.5-flash',
+      'gemini-3-flash',
+      'gemma-3-27b',
+      'gemma-3-12b',
+      'gemma-3-4b',
+    ];
+
+    String lastError = "";
 
     try {
-      final apiKey = dotenv.env['GEMINI_API_KEY'];
-      if (apiKey == null || apiKey.isEmpty) throw Exception("Thiếu API Key");
+      String? result;
+      String? successfulModel;
 
-      // 1. Cập nhật model sang 2.5 Flash Lite (hoặc gemini-3-flash)
-      final model = GenerativeModel(
-        model: 'gemini-2.5-flash-lite',
-        apiKey: apiKey,
-      );
+      outerLoop:
+      for (var apiKey in keysToTry) {
+        if (apiKey == null || apiKey.isEmpty) continue;
 
-      // 2. Lấy thông tin cây từ TextField
-      String plantContext = _plantInfoController.text.isEmpty
-          ? "Cây trồng chưa xác định"
-          : _plantInfoController.text;
+        for (var modelName in modelsToTry) {
+          try {
+            final model = GenerativeModel(model: modelName, apiKey: apiKey);
 
-      // 3. Chuẩn bị dữ liệu lịch sử (lấy nhiều hơn để AI so sánh)
-      String dataSummary = widget.historyData.isEmpty
-          ? "(Dữ liệu mô phỏng): Nhiệt độ 30°C, Đất 50%"
-          : widget.historyData
-                .take(10)
-                .map(
-                  (e) =>
-                      "Lúc ${DateFormat('HH:mm dd/MM').format(e.timestamp)}: T:${e.temp}°C, Đất:${e.soil}%, Khí:${e.humi}%",
-                )
-                .join("\n");
+            // Construct Prompt
+            final latest = _currentHistory.isNotEmpty
+                ? _currentHistory.last
+                : null;
+            final temp = latest?.temp.toStringAsFixed(1) ?? "N/A";
+            final humi = latest?.humi.toStringAsFixed(1) ?? "N/A";
+            final soil = latest?.soil.toStringAsFixed(1) ?? "N/A";
 
-      // 4. Tạo Prompt kết hợp cả thông tin cây + dữ liệu cảm biến
-      final prompt =
-          """
-        Thông tin về cây: $plantContext.
-        Dữ liệu cảm biến lịch sử và hiện tại:
-        $dataSummary
-        
-        Nhiệm vụ: Dựa vào loại cây này và dữ liệu trên, hãy phân tích tình trạng sức khỏe của cây và đưa ra lời khuyên chăm sóc ngắn gọn.
-      """;
+            // Format raw history for Gemini
+            String historyDataPoints = "";
+            if (_currentHistory.isNotEmpty) {
+              historyDataPoints = "Dữ liệu lịch sử ($_selectedRange qua):\n";
+              // Lấy tối đa 30 điểm dữ liệu gần nhất để tránh quá tải prompt
+              final displayHistory = _currentHistory.length > 30
+                  ? _currentHistory.sublist(_currentHistory.length - 30)
+                  : _currentHistory;
 
-      final content = [Content.text(prompt)];
-      final response = await model.generateContent(content);
+              historyDataPoints += displayHistory
+                  .map((e) {
+                    final timeStr = DateFormat(
+                      'HH:mm dd/MM',
+                    ).format(e.timestamp);
+                    return "- $timeStr: Nhiệt độ ${e.temp.toStringAsFixed(1)}°C, Độ ẩm đất ${e.soil.toStringAsFixed(1)}%";
+                  })
+                  .join("\n");
+            }
+
+            final plantInfo = _plantController.text.trim();
+            final plantContext = plantInfo.isNotEmpty
+                ? "Thông tin cây trồng: \"$plantInfo\"."
+                : "";
+
+            final prompt =
+                """
+            Bạn là chuyên gia nông nghiệp AI.
+            
+            Dữ liệu lịch sử cụ thể:
+            $historyDataPoints
+            
+            Dữ liệu mới nhất hiện tại: 
+            - Nhiệt độ: $temp°C
+            - Độ ẩm KK: $humi%
+            - Độ ẩm đất: $soil%
+            
+            Vị trí: ${widget.cityName}. Thời tiết: ${widget.weatherCondition}.
+            $plantContext
+            
+            Hãy phân tích kỹ và trả lời ngắn gọn (dưới 250 từ) theo cấu trúc sau:
+            1. Nhận xét chung & Diễn biến: Đánh giá môi trường, thời tiết hiện tại và soi kỹ danh sách lịch sử để phát hiện bất thường (chỉ rõ thời điểm nếu có biến động đột ngột).
+            2. Đánh giá sức khỏe & Độ ổn định: Dựa trên thông tin cây trồng và chỉ số, hãy kết luận hệ thống đang "Ổn" hay "Không ổn". Đánh giá sức khỏe cây và rủi ro (sâu bệnh, sốc nhiệt...).
+            3. Đề xuất hành động: Chỉ dẫn cụ thể (tưới nước, che chắn, ánh sáng...) cho cả trường hợp cây ngoài trời và trong nhà.
+            """;
+
+            final content = [Content.text(prompt)];
+            final response = await model.generateContent(content);
+
+            if (response.text != null && response.text!.isNotEmpty) {
+              result = response.text;
+              successfulModel = modelName;
+              break outerLoop; // Success! Exit both loops
+            }
+          } catch (e) {
+            lastError = e.toString();
+            debugPrint(
+              "Lỗi Model $modelName với API Key ...${apiKey.substring(apiKey.length - 5)}: $e",
+            );
+            continue;
+          }
+        }
+      }
 
       if (mounted) {
         setState(() {
-          _aiAnalysis = response.text ?? "AI không trả về kết quả.";
+          if (result != null) {
+            _aiAnalysis = result;
+            _currentModelUsed = successfulModel ?? "Không xác định";
+          } else {
+            _aiAnalysis = "Lỗi kết nối AI. Lỗi cuối:\n$lastError";
+          }
           _isLoadingAI = false;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _aiAnalysis = "Lỗi kết nối AI: ${e.toString()}";
+          _aiAnalysis =
+              "Lỗi phân tích: $e\n(Kiểm tra GEMINI_API_KEY trong .env)";
           _isLoadingAI = false;
         });
       }
     }
   }
 
-  void _generateChartData() {
+  void _updateChartFromHistory() {
     _realDataPoints.clear();
     _referencePoints.clear();
-    final random = Random();
 
-    // Số lượng điểm dữ liệu hiển thị
-    int points = _selectedRange == 'Ngày'
-        ? 24 // 24 giờ
-        : (_selectedRange == 'Tuần' ? 7 : 30); // 7 ngày hoặc 30 ngày
+    _currentHistory.sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
-    // Giá trị tham chiếu (đường nét đứt)
     double idealVal = _selectedSensor == 'Temp'
         ? 28.0
         : (_selectedSensor == 'Humi' ? 75.0 : 60.0);
 
-    // Giá trị nền random (nếu chưa map data thật)
-    double baseVal = _selectedSensor == 'Temp'
-        ? 27
-        : (_selectedSensor == 'Humi' ? 70 : 55);
-
-    // Logic: Nếu có historyData thì dùng, không thì random
-    if (widget.historyData.isNotEmpty && widget.historyData.length >= points) {
-      // TODO: Logic map dữ liệu thật vào đây sau này
-      // Tạm thời vẫn giữ random để UI đẹp khi test
-    }
-
-    for (int i = 0; i < points; i++) {
-      _realDataPoints.add(
-        FlSpot(i.toDouble(), baseVal + random.nextDouble() * 5),
-      );
+    for (int i = 0; i < _currentHistory.length; i++) {
+      final evt = _currentHistory[i];
+      double y;
+      if (_selectedSensor == 'Temp') {
+        y = evt.temp;
+      } else if (_selectedSensor == 'Humi') {
+        y = evt.humi;
+      } else {
+        y = evt.soil;
+      }
+      _realDataPoints.add(FlSpot(i.toDouble(), y));
       _referencePoints.add(FlSpot(i.toDouble(), idealVal));
     }
-    setState(() {});
+
+    if (mounted) setState(() {});
   }
 
   String _getDateRangeText() {
@@ -148,46 +259,62 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadData),
+        ],
       ),
-      body: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _getDateRangeText(),
-                style: const TextStyle(
-                  color: Color(0xFF00E676),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+      body: RefreshIndicator(
+        onRefresh: _loadData,
+        color: const Color(0xFF00E676),
+        backgroundColor: const Color(0xFF1E2630),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _getDateRangeText(),
+                  style: const TextStyle(
+                    color: Color(0xFF00E676),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 15),
-              _buildTimeFilter(),
-              const SizedBox(height: 20),
-              _buildSensorSelector(),
-              const SizedBox(height: 30),
+                const SizedBox(height: 15),
+                _buildTimeFilter(),
+                const SizedBox(height: 20),
+                _buildSensorSelector(),
+                const SizedBox(height: 30),
 
-              // Chiều cao biểu đồ
-              SizedBox(height: 300, child: _buildChart()),
+                if (_currentHistory.isNotEmpty)
+                  SizedBox(height: 300, child: _buildChart())
+                else
+                  const SizedBox(
+                    height: 300,
+                    child: Center(
+                      child: Text(
+                        "Đang tải dữ liệu...",
+                        style: TextStyle(color: Colors.white54),
+                      ),
+                    ),
+                  ),
 
-              const SizedBox(height: 15),
-              _buildLegend(),
-              const SizedBox(height: 30),
-              _buildPlantInput(),
+                const SizedBox(height: 15),
+                _buildLegend(),
+                const SizedBox(height: 30),
 
-              const SizedBox(height: 20),
-              _buildAIAnalysisText(),
-              const SizedBox(height: 20),
-            ],
+                _buildPlantInput(),
+                const SizedBox(height: 20),
+                _buildAIAnalysisText(),
+                const SizedBox(height: 20),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
-
-  // --- WIDGET UI ---
 
   Widget _buildTimeFilter() {
     return Container(
@@ -203,7 +330,7 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
             child: InkWell(
               onTap: () {
                 setState(() => _selectedRange = range);
-                _generateChartData();
+                _fetchHistory();
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 10),
@@ -245,7 +372,7 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
     return InkWell(
       onTap: () {
         setState(() => _selectedSensor = key);
-        _generateChartData();
+        _updateChartFromHistory();
       },
       child: Column(
         children: [
@@ -269,7 +396,6 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
 
   Widget _buildChart() {
     return LineChart(
-      // Tắt hiệu ứng chuyển động để biểu đồ chuyên nghiệp hơn
       duration: Duration.zero,
       LineChartData(
         lineTouchData: LineTouchData(
@@ -278,13 +404,10 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
             getTooltipItems: (List<LineBarSpot> touchedBarSpots) {
               return touchedBarSpots.map((barSpot) {
                 String timeLabel = "";
-                if (_selectedRange == 'Ngày') {
-                  timeLabel = "${barSpot.x.toInt()}h";
-                } else if (_selectedRange == 'Tuần') {
-                  final days = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
-                  timeLabel = days[barSpot.x.toInt() % 7];
-                } else {
-                  timeLabel = "Ngày ${barSpot.x.toInt() + 1}";
+                if (barSpot.x.toInt() >= 0 &&
+                    barSpot.x.toInt() < _currentHistory.length) {
+                  final evt = _currentHistory[barSpot.x.toInt()];
+                  timeLabel = DateFormat('HH:mm dd/MM').format(evt.timestamp);
                 }
 
                 return LineTooltipItem(
@@ -337,28 +460,25 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
-              interval: _selectedRange == 'Tháng'
-                  ? 5
-                  : (_selectedRange == 'Ngày' ? 4 : 1),
+              interval: _currentHistory.length > 10
+                  ? (_currentHistory.length / 5).toDouble()
+                  : 1,
               getTitlesWidget: (val, meta) {
-                String text = "";
-                if (_selectedRange == 'Tuần') {
-                  const days = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
-                  int index = val.toInt();
-                  if (index >= 0 && index < days.length) text = days[index];
-                } else if (_selectedRange == 'Ngày') {
-                  text = "${val.toInt()}h";
-                } else {
-                  text = "${val.toInt() + 1}";
+                int index = val.toInt();
+                if (index >= 0 && index < _currentHistory.length) {
+                  final evt = _currentHistory[index];
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 8.0),
+                    child: Text(
+                      DateFormat('HH:mm').format(evt.timestamp),
+                      style: const TextStyle(
+                        color: Colors.white38,
+                        fontSize: 10,
+                      ),
+                    ),
+                  );
                 }
-
-                return Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: Text(
-                    text,
-                    style: const TextStyle(color: Colors.white38, fontSize: 10),
-                  ),
-                );
+                return const SizedBox();
               },
             ),
           ),
@@ -417,37 +537,33 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
   );
 
   Widget _buildPlantInput() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          "THÔNG TIN CÂY TRỒNG",
-          style: TextStyle(
-            color: Colors.white54,
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E2630),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "Thông tin cây trồng:",
+            style: TextStyle(color: Colors.white70, fontSize: 14),
           ),
-        ),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _plantInfoController,
-          style: const TextStyle(color: Colors.white, fontSize: 14),
-          decoration: InputDecoration(
-            hintText: "Ví dụ: Cây dưa lưới, cao 1m, đang ra hoa...",
-            hintStyle: const TextStyle(color: Colors.white24, fontSize: 13),
-            filled: true,
-            fillColor: const Color(0xFF1E2630),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide.none,
-            ),
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 12,
+          const SizedBox(height: 5),
+          TextField(
+            controller: _plantController,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(
+              hintText: "VD: Cây dừa cao 3m, đang ra quả...",
+              hintStyle: TextStyle(color: Colors.white30),
+              border: InputBorder.none,
+              isDense: true,
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -471,13 +587,29 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
               ),
               const SizedBox(width: 8),
               const Text(
-                "GEMINI AI PHÂN TÍCH",
+                "GEMINI AI CONTEXT",
                 style: TextStyle(
                   color: Colors.blueAccent,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.1,
                 ),
               ),
+              if (_currentModelUsed.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8.0),
+                  child: Text(
+                    "(${_currentModelUsed.contains('lite')
+                        ? '2.0 Flash Lite'
+                        : _currentModelUsed.contains('2.0')
+                        ? '2.0 Flash'
+                        : '1.5 Flash'})",
+                    style: TextStyle(
+                      color: Colors.blueAccent.withOpacity(0.5),
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
               const Spacer(),
               if (_isLoadingAI)
                 const SizedBox(
@@ -503,7 +635,7 @@ class _SensorDashboardScreenState extends State<SensorDashboardScreen> {
             child: TextButton.icon(
               onPressed: _isLoadingAI ? null : _fetchAIAnalysis,
               icon: const Icon(Icons.refresh, size: 16),
-              label: const Text("Cập nhật phân tích"),
+              label: const Text("Phân tích"),
             ),
           ),
         ],

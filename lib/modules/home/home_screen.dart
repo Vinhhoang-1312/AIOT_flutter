@@ -1,11 +1,15 @@
 import 'dart:async';
-import 'dart:math';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../../data/models/farm_event_model.dart';
+import '../../data/services/weather_service.dart';
 import '../../widgets/sensor_card.dart';
 import '../camera/camera_screen.dart';
 import '../controls/pump_control_screen.dart';
+import 'city_selection_screen.dart';
 import 'log_screen.dart';
 import 'sensor_dashboard_screen.dart';
 import '../about/about_screen.dart';
@@ -18,110 +22,126 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int _selectedIndex = 0;
-  // List chứa lịch sử dữ liệu
   final List<FarmEvent> _eventHistory = [];
-  // Dữ liệu mới nhất
   FarmEvent? _latestEvent;
-  Timer? _timer;
 
-  // Ảnh mock dùng chung
-  final List<String> _mockImages = [
-    "https://images.unsplash.com/photo-1545239351-ef056c5983f3?q=80&w=500", // Healthy
-    "https://images.unsplash.com/photo-1520412099551-6296b0db5c04?q=80&w=500", // Dry
-    "https://images.unsplash.com/photo-1485955900006-10f4d324d411?q=80&w=500", // Cactus
-    "https://images.unsplash.com/photo-1592419044706-39796d40f98c?w=500", // Another plant
-  ];
+  final WeatherService _weatherService = WeatherService();
+  City _selectedCity = WeatherService.cities[0]; // Default: Da Nang
+  Map<String, dynamic>? _weatherData;
+  String _weatherDesc = "--";
+  String _lightCondition = "--";
+
+  http.Client? _client;
+  StreamSubscription? _sseSubscription;
 
   @override
   void initState() {
     super.initState();
-    // 1. Tạo ngay dữ liệu ban đầu để Gallery không bị trống
-    _generateInitialMockData();
-    // 2. Sau đó mới bắt đầu chạy stream giả lập
-    _startSimulatedStream();
+    _connectToSSE();
+    _fetchWeather();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _sseSubscription?.cancel();
+    _client?.close();
     super.dispose();
   }
 
-  // --- HÀM MỚI: TẠO DỮ LIỆU GIẢ NGAY LẬP TỨC ---
-  void _generateInitialMockData() {
-    final random = Random();
-    // Tạo sẵn 3 event quá khứ có ảnh
-    for (int i = 0; i < 3; i++) {
-      _eventHistory.add(
-        FarmEvent(
-          // Lùi thời gian lại một chút cho thật (cách nhau 15p)
-          timestamp: DateTime.now().subtract(Duration(minutes: (i + 1) * 15)),
-          soil: 50.0 + random.nextDouble() * 15,
-          temp: 28.0 + random.nextDouble() * 5,
-          humi: 65.0 + random.nextDouble() * 10,
-          anomalyStatus: "Normal",
-          plantStatus: "Healthy",
-          // Đảm bảo luôn có ảnh
-          imageBase64: _mockImages[i % _mockImages.length],
-        ),
-      );
+  Future<void> _fetchWeather() async {
+    final data = await _weatherService.getWeather(
+      lat: _selectedCity.lat,
+      lon: _selectedCity.lon,
+    );
+    if (data != null && mounted) {
+      setState(() {
+        _weatherData = data;
+        final current = data['current'];
+        final code = current['weather_code'];
+        _weatherDesc = _weatherService.getWeatherDescription(code);
+        _lightCondition = _weatherService.getLightCondition(current);
+      });
     }
-    // Cập nhật event mới nhất là cái đầu tiên vừa tạo
-    if (_eventHistory.isNotEmpty) {
-      _latestEvent = _eventHistory.first;
-    }
-    setState(() {}); // Cập nhật UI ngay
   }
 
-  // --- HÀM GIẢ LẬP STREAM (Chạy liên tục) ---
-  void _startSimulatedStream() {
-    _timer = Timer.periodic(const Duration(seconds: 4), (timer) {
-      final random = Random();
+  void _openCitySelection() async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CitySelectionScreen()),
+    );
 
-      final newEvent = FarmEvent(
-        timestamp: DateTime.now(),
-        soil: 40.0 + random.nextDouble() * 20,
-        temp: 26.0 + random.nextDouble() * 6,
-        humi: 55.0 + random.nextDouble() * 20,
-        anomalyStatus: random.nextInt(10) > 8 ? "Warning" : "Normal",
-        plantStatus: random.nextBool() ? "Healthy" : "Needs Water",
-        // 50% cơ hội có ảnh mới khi stream chạy
-        imageBase64: random.nextBool()
-            ? _mockImages[random.nextInt(_mockImages.length)]
-            : null,
-      );
+    if (result != null && result is City) {
+      setState(() {
+        _selectedCity = result;
+        _weatherData = null; // Reset to show loading/update
+        _weatherDesc = "Đang tải...";
+        _lightCondition = "--";
+      });
+      _fetchWeather();
+    }
+  }
 
-      if (mounted) {
-        setState(() {
-          _latestEvent = newEvent;
-          _eventHistory.insert(0, newEvent); // Đưa dữ liệu mới lên đầu list
-          if (_eventHistory.length > 50) _eventHistory.removeLast();
-        });
-      }
+  void _connectToSSE() async {
+    final baseUrl = dotenv.env['BACKEND_URL'] ?? "http://10.0.2.2:8000";
+    final url = Uri.parse("$baseUrl/events");
+
+    try {
+      _client = http.Client();
+      final request = http.Request("GET", url);
+      request.headers['Accept'] = 'text/event-stream';
+      request.headers['Cache-Control'] = 'no-cache';
+
+      final response = await _client!.send(request);
+
+      _sseSubscription = response.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen(
+            (line) {
+              if (line.startsWith("data: ")) {
+                try {
+                  final data = line.substring(6).trim();
+                  if (data.isEmpty) return;
+
+                  final decoded = jsonDecode(data);
+                  final newEvent = FarmEvent.fromJson(decoded);
+
+                  if (mounted) {
+                    setState(() {
+                      _latestEvent = newEvent;
+                      _eventHistory.insert(0, newEvent);
+                      if (_eventHistory.length > 50) _eventHistory.removeLast();
+                    });
+                  }
+                } catch (e) {
+                  debugPrint("Lỗi parse JSON: $e");
+                }
+              }
+            },
+            onError: (e) {
+              debugPrint("Lỗi kết nối Stream: $e");
+              _reconnect();
+            },
+            onDone: () {
+              debugPrint("Server đã đóng kết nối.");
+              _reconnect();
+            },
+          );
+    } catch (e) {
+      debugPrint("Không thể kết nối Backend: $e");
+      _reconnect();
+    }
+  }
+
+  void _reconnect() {
+    _sseSubscription?.cancel();
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted) _connectToSSE();
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final List<Widget> pages = [
-      DashboardView(
-        latestEvent: _latestEvent,
-        onOpenDashboard: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => SensorDashboardScreen(historyData: _eventHistory),
-            ),
-          );
-        },
-      ),
-      // Truyền list dữ liệu đã có sẵn ảnh vào đây
-      AICameraGalleryScreen(events: _eventHistory),
-      const PumpControlScreen(),
-      const LogScreen(),
-    ];
-
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       extendBodyBehindAppBar: true,
@@ -149,7 +169,26 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       drawer: _buildDrawer(context),
-      body: pages[_selectedIndex],
+      body: DashboardView(
+        latestEvent: _latestEvent,
+        weatherDesc: _weatherDesc,
+        lightCondition: _lightCondition,
+        cityName: _selectedCity.name,
+        onWeatherTap: _openCitySelection,
+        onRefresh: _fetchWeather,
+        onOpenDashboard: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SensorDashboardScreen(
+                historyData: _eventHistory,
+                cityName: _selectedCity.name,
+                weatherCondition: _weatherDesc,
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -179,12 +218,47 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Icon(Icons.eco, color: Colors.black, size: 35),
             ),
           ),
-          _buildDrawerItem(Icons.grid_view_rounded, "Tổng quan", 0),
-          _buildDrawerItem(Icons.camera_alt_rounded, "AI Camera Gallery", 1),
-          _buildDrawerItem(Icons.water_drop, "Điều khiển Bơm", 2),
-          _buildDrawerItem(Icons.history_edu, "Nhật ký hoạt động", 3),
+          _buildDrawerItem(
+            Icons.grid_view_rounded,
+            "Tổng quan",
+            onTap: () => Navigator.pop(context), // Already on Home
+          ),
+          _buildDrawerItem(
+            Icons.camera_alt_rounded,
+            "AI Camera Gallery",
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => AICameraGalleryScreen(events: _eventHistory),
+                ),
+              );
+            },
+          ),
+          _buildDrawerItem(
+            Icons.water_drop,
+            "Điều khiển Bơm",
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PumpControlScreen()),
+              );
+            },
+          ),
+          _buildDrawerItem(
+            Icons.history_edu,
+            "Nhật ký hoạt động",
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const LogScreen()),
+              );
+            },
+          ),
           const Spacer(),
-          const Divider(color: Colors.white10),
           ListTile(
             leading: const Icon(Icons.info_outline, color: Colors.white70),
             title: const Text(
@@ -205,38 +279,43 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildDrawerItem(IconData icon, String title, int index) {
-    bool isSelected = _selectedIndex == index;
+  Widget _buildDrawerItem(
+    IconData icon,
+    String title, {
+    required VoidCallback onTap,
+  }) {
     return ListTile(
-      leading: Icon(
-        icon,
-        color: isSelected ? const Color(0xFF00E676) : Colors.white70,
-      ),
+      leading: Icon(icon, color: Colors.white70),
       title: Text(
         title,
-        style: TextStyle(
-          color: isSelected ? const Color(0xFF00E676) : Colors.white70,
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        style: const TextStyle(
+          color: Colors.white70,
+          fontWeight: FontWeight.normal,
         ),
       ),
-      selected: isSelected,
-      selectedTileColor: Colors.white.withOpacity(0.05),
-      onTap: () {
-        setState(() => _selectedIndex = index);
-        Navigator.pop(context);
-      },
+      onTap: onTap,
     );
   }
 }
 
-// --- DASHBOARD VIEW ---
 class DashboardView extends StatelessWidget {
   final FarmEvent? latestEvent;
   final VoidCallback onOpenDashboard;
+  final String weatherDesc;
+  final String lightCondition;
+  final String cityName;
+  final VoidCallback? onWeatherTap;
+  final Future<void> Function() onRefresh;
+
   const DashboardView({
     super.key,
     this.latestEvent,
     required this.onOpenDashboard,
+    required this.onRefresh,
+    this.weatherDesc = "--",
+    this.lightCondition = "--",
+    this.cityName = "Đà Nẵng",
+    this.onWeatherTap,
   });
 
   @override
@@ -245,6 +324,7 @@ class DashboardView extends StatelessWidget {
     final soil = latestEvent?.soil.toStringAsFixed(1) ?? "--";
     final humi = latestEvent?.humi.toStringAsFixed(1) ?? "--";
     final status = latestEvent?.plantStatus ?? "Đang kết nối...";
+    final isConnected = latestEvent != null;
 
     return Container(
       decoration: const BoxDecoration(
@@ -255,148 +335,166 @@ class DashboardView extends StatelessWidget {
         ),
       ),
       child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          children: [
-            const SizedBox(height: 30),
-
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Container(
-                  width: 10,
-                  height: 10,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF00E676),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  "Trạng thái: $status",
-                  style: const TextStyle(
-                    color: Color(0xFF00E676),
-                    fontSize: 15,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 25),
-
-            // Button Chart
-            InkWell(
-              onTap: onOpenDashboard,
-              borderRadius: BorderRadius.circular(16),
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.blueAccent.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.analytics_outlined,
-                      color: Colors.blueAccent,
-                    ),
-                    const SizedBox(width: 15),
-                    const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Phân tích dữ liệu",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
+        child: RefreshIndicator(
+          onRefresh: onRefresh,
+          color: const Color(0xFF00E676),
+          backgroundColor: const Color(0xFF1E2630),
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            children: [
+              const SizedBox(height: 20),
+              // Header Status
+              Row(
+                children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 500),
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: isConnected
+                          ? const Color(0xFF00E676)
+                          : Colors.orange,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        if (isConnected)
+                          BoxShadow(
+                            color: const Color(0xFF00E676).withOpacity(0.5),
+                            blurRadius: 10,
                           ),
-                        ),
-                        Text(
-                          "Xem biểu đồ thời gian thực",
-                          style: TextStyle(color: Colors.white54, fontSize: 12),
-                        ),
                       ],
                     ),
-                    const Spacer(),
-                    const Icon(
-                      Icons.arrow_forward_ios,
-                      size: 14,
-                      color: Colors.white38,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    "Trạng thái: $status",
+                    style: TextStyle(
+                      color: isConnected
+                          ? const Color(0xFF00E676)
+                          : Colors.white54,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
                     ),
-                  ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 25),
+              // Analytic Card
+              InkWell(
+                onTap: onOpenDashboard,
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.blueAccent.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: Colors.blueAccent.withOpacity(0.3),
+                    ),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.analytics_outlined, color: Colors.blueAccent),
+                      SizedBox(width: 15),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Phân tích dữ liệu",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            "Xem biểu đồ thời gian thực",
+                            style: TextStyle(
+                              color: Colors.white54,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Spacer(),
+                      Icon(
+                        Icons.arrow_forward_ios,
+                        size: 14,
+                        color: Colors.white38,
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-
-            const SizedBox(height: 25),
-            GridView.count(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: 2,
-              crossAxisSpacing: 15,
-              mainAxisSpacing: 15,
-              children: [
-                SensorCard(
-                  title: "Nhiệt độ",
-                  value: temp,
-                  unit: "°C",
-                  icon: Icons.thermostat,
-                  iconColor: Colors.orange,
-                ),
-                SensorCard(
-                  title: "Độ ẩm đất",
-                  value: soil,
-                  unit: "%",
-                  icon: Icons.grass,
-                  iconColor: Colors.brown,
-                ),
-                SensorCard(
-                  title: "Độ ẩm KK",
-                  value: humi,
-                  unit: "%",
-                  icon: Icons.cloud_queue,
-                  iconColor: Colors.blue,
-                ),
-                const SensorCard(
-                  title: "Ánh sáng",
-                  value: "1.2k",
-                  unit: "Lux",
-                  icon: Icons.wb_sunny,
-                  iconColor: Colors.yellow,
-                ),
-              ],
-            ),
-            const SizedBox(height: 30),
-            const Text(
-              "Tiện ích nhanh",
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.white70,
+              const SizedBox(height: 25),
+              // Sensors Grid
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 2,
+                crossAxisSpacing: 15,
+                mainAxisSpacing: 15,
+                children: [
+                  SensorCard(
+                    title: "Nhiệt độ",
+                    value: temp,
+                    unit: "°C",
+                    icon: Icons.thermostat,
+                    iconColor: Colors.orange,
+                  ),
+                  SensorCard(
+                    title: "Độ ẩm đất",
+                    value: soil,
+                    unit: "%",
+                    icon: Icons.grass,
+                    iconColor: Colors.brown,
+                  ),
+                  SensorCard(
+                    title: "Độ ẩm KK",
+                    value: humi,
+                    unit: "%",
+                    icon: Icons.cloud_queue,
+                    iconColor: Colors.blue,
+                  ),
+                  SensorCard(
+                    title: "Thời tiết ($cityName)",
+                    value: weatherDesc,
+                    unit: lightCondition,
+                    icon: Icons.wb_sunny,
+                    iconColor: Colors.yellow,
+                    onTap: onWeatherTap,
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 15),
-            Row(
-              children: [
-                _buildActionBtn(
-                  context,
-                  "Bật Bơm",
-                  Icons.water_drop,
-                  Colors.green,
-                  const PumpControlScreen(),
+              const SizedBox(height: 25),
+              const Text(
+                "Điều khiển nhanh",
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white70,
                 ),
-                const SizedBox(width: 15),
-                _buildActionBtn(
-                  context,
-                  "Nhật ký",
-                  Icons.history,
-                  Colors.purple,
-                  const LogScreen(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 40),
-          ],
+              ),
+              const SizedBox(height: 15),
+              Row(
+                children: [
+                  _buildActionBtn(
+                    context,
+                    "Hệ thống Bơm",
+                    Icons.water_drop,
+                    Colors.green,
+                    const PumpControlScreen(),
+                  ),
+                  const SizedBox(width: 15),
+                  _buildActionBtn(
+                    context,
+                    "Lịch sử Log",
+                    Icons.history,
+                    Colors.purple,
+                    const LogScreen(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 40),
+            ],
+          ),
         ),
       ),
     );
@@ -413,11 +511,13 @@ class DashboardView extends StatelessWidget {
       child: InkWell(
         onTap: () =>
             Navigator.push(context, MaterialPageRoute(builder: (_) => page)),
+        borderRadius: BorderRadius.circular(16),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 20),
           decoration: BoxDecoration(
             color: const Color(0xFF1E2630),
             borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withOpacity(0.05)),
           ),
           child: Column(
             children: [

@@ -1,40 +1,33 @@
 // lib/modules/home/log_screen.dart
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import '../../data/services/api_service.dart';
+import '../../data/models/log_model.dart';
 
-class LogScreen extends StatelessWidget {
+class LogScreen extends StatefulWidget {
   const LogScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    // Dữ liệu giả lập từ Backend
-    final List<Map<String, dynamic>> logs = [
-      {
-        "time": "14:30",
-        "title": "Phân tích đất",
-        "msg": "Độ ẩm đất đạt 65%. Không cần tưới nước cho đến 18:00.",
-        "type": "info",
-      },
-      {
-        "time": "12:15",
-        "title": "Cảnh báo nhiệt độ",
-        "msg":
-            "Nhiệt độ vườn tăng lên 36°C. Hệ thống đã kích hoạt phun sương 5 phút.",
-        "type": "warning",
-      },
-      {
-        "time": "08:00",
-        "title": "Báo cáo sáng",
-        "msg": "Hôm nay dự báo không mưa. Hệ thống lên lịch tưới lúc 17:30.",
-        "type": "info",
-      },
-      {
-        "time": "06:00",
-        "title": "Hệ thống",
-        "msg": "Thiết bị ESP32 đã kết nối lại thành công.",
-        "type": "success",
-      },
-    ];
+  State<LogScreen> createState() => _LogScreenState();
+}
 
+class _LogScreenState extends State<LogScreen> {
+  late Future<List<Log>> _logsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _logsFuture = ApiService.getStatusLogs();
+  }
+
+  Future<void> _refreshLogs() async {
+    setState(() {
+      _logsFuture = ApiService.getStatusLogs();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
@@ -44,28 +37,59 @@ class LogScreen extends StatelessWidget {
         ),
         backgroundColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshLogs,
+          )
+        ],
       ),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: logs.length,
-        itemBuilder: (context, index) {
-          final log = logs[index];
-          return _buildLogItem(log);
+      body: FutureBuilder<List<Log>>(
+        future: _logsFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                "Lỗi tải dữ liệu: ${snapshot.error}",
+                style: const TextStyle(color: Colors.red),
+              ),
+            );
+          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(
+              child: Text(
+                "Không có dữ liệu nhật ký.",
+                style: TextStyle(color: Colors.white54),
+              ),
+            );
+          }
+
+          final logs = snapshot.data!;
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: logs.length,
+            itemBuilder: (context, index) {
+              final log = logs[index];
+              return _buildLogItem(log);
+            },
+          );
         },
       ),
     );
   }
 
-  Widget _buildLogItem(Map<String, dynamic> log) {
+  Widget _buildLogItem(Log log) {
     Color iconColor;
     IconData iconData;
 
-    switch (log['type']) {
-      case 'warning':
+    switch (log.level.toUpperCase()) {
+      case 'WARNING':
+      case 'ERROR':
         iconColor = Colors.orange;
         iconData = Icons.warning_amber_rounded;
         break;
-      case 'success':
+      case 'SUCCESS':
         iconColor = Colors.green;
         iconData = Icons.check_circle_outline;
         break;
@@ -88,10 +112,17 @@ class LogScreen extends StatelessWidget {
           Column(
             children: [
               Text(
-                log['time'],
+                DateFormat('HH:mm').format(log.timestamp),
                 style: const TextStyle(
                   color: Colors.white70,
                   fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                DateFormat('dd/MM').format(log.timestamp),
+                style: const TextStyle(
+                  color: Colors.white38,
+                  fontSize: 10,
                 ),
               ),
               const SizedBox(height: 8),
@@ -104,7 +135,7 @@ class LogScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  log['title'],
+                  log.level,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
@@ -113,13 +144,25 @@ class LogScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  log['msg'],
+                  log.message,
                   style: const TextStyle(
                     color: Colors.white60,
                     fontSize: 14,
                     height: 1.4,
                   ),
                 ),
+                if (log.details != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4.0),
+                    child: Text(
+                      log.details!,
+                      style: const TextStyle(
+                        color: Colors.white38,
+                        fontSize: 12,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -128,3 +171,4 @@ class LogScreen extends StatelessWidget {
     );
   }
 }
+
